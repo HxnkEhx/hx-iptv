@@ -8,6 +8,7 @@ import de.hxnk.iptv.data.ChannelEntity
 import de.hxnk.iptv.data.FavoriteEntity
 import de.hxnk.iptv.data.ProgrammeEntity
 import de.hxnk.iptv.data.ProgrammeLite
+import de.hxnk.iptv.data.Updater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,9 +84,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
+    /** Gefundenes Update (null = nichts Neues bzw. noch nicht geprüft). */
+    val update = MutableStateFlow<Updater.Info?>(null)
+    val updateStatus = MutableStateFlow("")
+
     init {
         val stale = System.currentTimeMillis() - settings.lastSync > 12 * 3600_000L
         if (configured.value && stale) refresh()
+        checkUpdate()
+    }
+
+    val versionName: String get() = Updater.installedVersionName(getApplication())
+
+    fun checkUpdate(manual: Boolean = false) {
+        Graph.scope.launch {
+            if (manual) updateStatus.value = "Suche nach Updates …"
+            try {
+                val info = Updater.check(getApplication())
+                update.value = info
+                if (manual) {
+                    updateStatus.value =
+                        if (info == null) "Du hast die neueste Version ($versionName)."
+                        else "Update ${info.name} verfügbar."
+                }
+            } catch (e: Exception) {
+                if (manual) updateStatus.value = "Update-Suche fehlgeschlagen: ${e.message}"
+            }
+        }
+    }
+
+    fun installUpdate() {
+        val info = update.value ?: return
+        val ctx = getApplication<Application>()
+        if (!Updater.ensureInstallPermission(ctx)) {
+            updateStatus.value =
+                "Bitte erlaube HX IPTV in den Einstellungen die Installation und tippe danach nochmal auf „Update installieren“."
+            return
+        }
+        Graph.scope.launch {
+            try {
+                updateStatus.value = "Lade Update …"
+                val apk = Updater.download(ctx, info) { pct -> updateStatus.value = "Lade Update … $pct %" }
+                updateStatus.value = "Installation wird gestartet …"
+                Updater.install(ctx, apk)
+            } catch (e: Exception) {
+                updateStatus.value = "Update fehlgeschlagen: ${e.message}"
+            }
+        }
     }
 
     private fun buildGroups(ch: List<ChannelEntity>, fav: Set<String>): List<GroupItem> {

@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -32,6 +33,8 @@ fun SetupScreen(vm: MainViewModel) {
     var playlist by remember { mutableStateOf(Graph.settings.playlistUrl) }
     var epg by remember { mutableStateOf(Graph.settings.epgUrl) }
     val configured by vm.configured.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
 
     Column(
         Modifier
@@ -81,6 +84,22 @@ fun SetupScreen(vm: MainViewModel) {
             }
             if (configured) {
                 OutlinedButton(onClick = { vm.closeSettings() }) { Text("Abbrechen") }
+            }
+        }
+
+        Spacer(Modifier.height(36.dp))
+        Text("Version ${vm.versionName}", color = TextDim, fontSize = 13.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = { vm.checkUpdate(manual = true) }) { Text("Nach Updates suchen") }
+            if (update != null) {
+                Button(onClick = { vm.installUpdate() }) { Text("Update installieren") }
+            }
+            if (updateStatus.isNotEmpty()) {
+                Text(updateStatus, color = Accent, fontSize = 14.sp)
             }
         }
     }

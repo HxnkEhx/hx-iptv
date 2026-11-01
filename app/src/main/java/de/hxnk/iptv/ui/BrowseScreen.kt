@@ -69,6 +69,8 @@ fun BrowseScreen(vm: MainViewModel) {
     val ready by vm.ready.collectAsStateWithLifecycle()
     val playing by vm.playing.collectAsStateWithLifecycle()
     val lastPlayed by vm.lastPlayedUrl.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val updateStatus by vm.updateStatus.collectAsStateWithLifecycle()
 
     var focusedChannel by remember { mutableStateOf<ChannelEntity?>(null) }
     val restore = remember { FocusRequester() }
@@ -101,6 +103,13 @@ fun BrowseScreen(vm: MainViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SmallButton("Neu laden") { vm.refresh() }
                 SmallButton("Setup") { vm.openSettings() }
+            }
+            if (update != null || updateStatus.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                if (update != null) SmallButton("Update installieren") { vm.installUpdate() }
+                if (updateStatus.isNotEmpty()) {
+                    Text(updateStatus, fontSize = 12.sp, color = Accent, modifier = Modifier.padding(top = 6.dp))
+                }
             }
             Spacer(Modifier.height(14.dp))
             LazyColumn(Modifier.weight(1f)) {

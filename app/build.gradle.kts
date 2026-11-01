@@ -9,19 +9,34 @@ android {
     namespace = "de.hxnk.iptv"
     compileSdk = 35
 
+    // Die Versionsnummer kommt vom CI-Build (-PhxVersionCode=<Build-Nummer>), lokal ist sie 1.
+    val hxVersionCode = (project.findProperty("hxVersionCode") as String?)?.toIntOrNull() ?: 1
+
     defaultConfig {
         applicationId = "de.hxnk.iptv"
         minSdk = 22
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = hxVersionCode
+        versionName = "1.$hxVersionCode"
+    }
+
+    // Fester Schlüssel aus dem GitHub-Secret: nur damit lassen sich Updates über die alte Version installieren.
+    val keystorePath = System.getenv("HX_KEYSTORE")
+    signingConfigs {
+        if (keystorePath != null && File(keystorePath).exists()) {
+            create("hx") {
+                storeFile = File(keystorePath)
+                storePassword = "hxiptv-store"
+                keyAlias = "hx"
+                keyPassword = "hxiptv-store"
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Mit dem Debug-Schlüssel signiert, damit die APK direkt installierbar ist.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("hx") ?: signingConfigs.getByName("debug")
         }
     }
 
