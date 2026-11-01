@@ -93,7 +93,7 @@ class IptvApp : Application(), ImageLoaderFactory {
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         Graph.init(applicationContext)
-        if (Graph.settings.playlistUrl.isBlank()) return Result.success()
+        if (!Graph.settings.isConfigured) return Result.success()
         return if (Graph.repo.sync()) Result.success() else Result.retry()
     }
 }

@@ -31,7 +31,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = Graph.db.dao()
     private val settings = Graph.settings
 
-    val configured = MutableStateFlow(settings.playlistUrl.isNotBlank())
+    val configured = MutableStateFlow(settings.isConfigured)
     val showSettings = MutableStateFlow(false)
     val playing = MutableStateFlow<ChannelEntity?>(null)
     val lastPlayedUrl = MutableStateFlow<String?>(null)
@@ -186,10 +186,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         showSettings.value = false
     }
 
-    fun save(playlist: String, epg: String) {
-        settings.playlistUrl = normalizeUrl(playlist)
+    fun save(
+        mode: String,
+        playlist: String,
+        host: String,
+        user: String,
+        pass: String,
+        format: String,
+        epg: String,
+    ) {
+        settings.mode = mode
+        settings.playlistUrl = if (playlist.isBlank()) "" else normalizeUrl(playlist)
+        settings.xtreamHost = if (host.isBlank()) "" else normalizeUrl(host).trimEnd('/')
+        settings.xtreamUser = user.trim()
+        settings.xtreamPass = pass.trim()
+        settings.streamFormat = format
         settings.epgUrl = if (epg.isBlank()) "" else normalizeUrl(epg)
-        configured.value = true
+        configured.value = settings.isConfigured
         showSettings.value = false
         selectedGroup.value = GROUP_ALL
         refresh()

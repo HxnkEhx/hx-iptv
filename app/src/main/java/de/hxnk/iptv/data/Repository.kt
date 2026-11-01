@@ -6,6 +6,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.net.URLEncoder
 import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 
 class Repository(
     private val ctx: Context,
@@ -28,6 +30,8 @@ class Repository(
         val error: String? = null,
     )
 
+    private class Loaded(val channels: List<ChannelEntity>, val epgUrl: String?)
+
     private val _state = MutableStateFlow(SyncState())
     val state: StateFlow<SyncState> = _state
 
@@ -37,32 +41,30 @@ class Repository(
 
     private val mutex = Mutex()
 
-    /** Lädt Playlist und TV-Programm neu. Gibt true zurück, wenn die Playlist erfolgreich war. */
+    /** Lädt Sender und TV-Programm neu. Gibt true zurück, wenn die Senderliste erfolgreich war. */
     suspend fun sync(): Boolean = withContext(Dispatchers.IO) {
-        if (settings.playlistUrl.isBlank()) return@withContext false
+        if (!settings.isConfigured) return@withContext false
         if (!mutex.tryLock()) return@withContext false
         try {
-            _state.value = SyncState(running = true, message = "Playlist wird geladen …")
+            _state.value = SyncState(running = true, message = "Sender werden geladen …")
 
             var channels: List<ChannelEntity> = emptyList()
-            var epgFromPlaylist: String? = null
+            var epgFromProvider: String? = null
             try {
-                val file = File(ctx.cacheDir, "playlist.m3u")
-                download(settings.playlistUrl, file)
-                val res = file.bufferedReader().use { M3uParser.parse(it) }
-                if (res.channels.isEmpty()) throw IOException("Die Playlist enthält keine Sender")
-                dao.replaceChannels(res.channels)
-                channels = res.channels
-                epgFromPlaylist = res.epgUrls.firstOrNull()
+                val loaded = if (settings.mode == "xtream") loadXtream() else loadM3u()
+                if (loaded.channels.isEmpty()) throw IOException("Keine Sender gefunden")
+                dao.replaceChannels(loaded.channels)
+                channels = loaded.channels
+                epgFromProvider = loaded.epgUrl
                 _version.update { it + 1 }
             } catch (e: Exception) {
                 // Alte Daten bleiben erhalten, die App funktioniert weiter offline.
-                _state.value = SyncState(error = "Playlist konnte nicht geladen werden: ${e.message}")
+                _state.value = SyncState(error = "Sender konnten nicht geladen werden: ${e.message}")
                 return@withContext false
             }
 
             var epgError: String? = null
-            val epgUrl = settings.epgUrl.ifBlank { epgFromPlaylist ?: "" }
+            val epgUrl = settings.epgUrl.ifBlank { epgFromProvider ?: "" }
             if (epgUrl.isNotBlank()) {
                 try {
                     _state.value = SyncState(running = true, message = "Programmdaten werden geladen …")
@@ -84,12 +86,66 @@ class Repository(
         }
     }
 
+    // ---------- Quellen ----------
+
+    private fun loadM3u(): Loaded {
+        val file = File(ctx.cacheDir, "playlist.m3u")
+        download(settings.playlistUrl, file)
+        val res = file.bufferedReader().use { M3uParser.parse(it) }
+        return Loaded(res.channels, res.epgUrls.firstOrNull())
+    }
+
+    /** Xtream-Codes-API: Kategorien + Live-Sender, TV-Programm über xmltv.php. */
+    private fun loadXtream(): Loaded {
+        val host = settings.xtreamHost.trim().trimEnd('/')
+        val user = settings.xtreamUser.trim()
+        val pass = settings.xtreamPass.trim()
+        val u = URLEncoder.encode(user, "UTF-8")
+        val p = URLEncoder.encode(pass, "UTF-8")
+        val base = "$host/player_api.php?username=$u&password=$p"
+
+        val catText = fetchText("$base&action=get_live_categories")
+        if (catText.trimStart().startsWith("{")) {
+            throw IOException("Anmeldung fehlgeschlagen – Server, Benutzername und Passwort prüfen")
+        }
+        val names = HashMap<String, String>()
+        val cats = JSONArray(catText)
+        for (i in 0 until cats.length()) {
+            val o = cats.optJSONObject(i) ?: continue
+            names[o.optString("category_id")] = o.optString("category_name").trim()
+        }
+
+        val streams = JSONArray(fetchText("$base&action=get_live_streams"))
+        val ext = if (settings.streamFormat == "m3u8") "m3u8" else "ts"
+        val out = ArrayList<ChannelEntity>(streams.length())
+        for (i in 0 until streams.length()) {
+            val o = streams.optJSONObject(i) ?: continue
+            val id = o.optString("stream_id")
+            if (id.isBlank()) continue
+            val name = o.optString("name").trim().ifEmpty { "Sender $id" }
+            val group = names[o.optString("category_id")]?.ifEmpty { null } ?: "Ohne Gruppe"
+            val icon = o.optString("stream_icon").trim().takeIf { it.startsWith("http", ignoreCase = true) }
+            val epgId = o.optString("epg_channel_id").trim().takeIf { it.isNotEmpty() && it != "null" }
+            val url = "$host/live/$user/$pass/$id.$ext"
+            out.add(ChannelEntity(url, name, group, icon, epgId, out.size))
+        }
+        return Loaded(out, "$host/xmltv.php?username=$u&password=$p")
+    }
+
+    private fun fetchText(url: String): String {
+        val f = File(ctx.cacheDir, "api.json")
+        download(url, f)
+        return f.readText()
+    }
+
+    // ---------- EPG ----------
+
     private suspend fun importEpg(file: File, channels: List<ChannelEntity>) {
         val now = System.currentTimeMillis()
         val from = now - 2 * 3600_000L
         val until = now + 3 * 24 * 3600_000L
 
-        // 1. Kanalkopf lesen und mit der Playlist abgleichen (erst per tvg-id, dann per Name)
+        // 1. Kanalkopf lesen und mit den Sendern abgleichen (erst per ID, dann per Name)
         val xmlChannels = openMaybeGz(file).use { XmltvParser.readChannels(it) }
         val xmlIds = xmlChannels.keys
         val lowerIds = HashMap<String, String>()
